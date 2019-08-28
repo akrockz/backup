@@ -1,0 +1,29 @@
+---
+
+- label: deploy-core-backup-resources-compliance
+  type: create_stack
+  params:
+    template: backup-compliance.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-resources"
+    parameters:
+      ClientName: "abc"
+    accounts:
+      - "675465653"  # Compliance account
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
+
+- label: deploy-core-backup-resources-automation
+  type: create_stack
+  depends_on: [ deploy-core-backup-resources-compliance ]
+  params:
+    template: backup-automation.yaml
+    stack_name: "{{ core.Project }}-{{ core.App }}-resources"
+    parameters:
+      ArtifactBucketName: "{{ core.ArtifactBucketName }}"
+      ArtifactKeyPrefix: "{{ core.ArtifactKeyPrefix }}"
+      CodeBuildImage: 2453254235.dkr.ecr.ap-southeast-1.amazonaws.com/core-codecommit-mini:latest
+      BackupBucketName: "{{ deploy-core-backup-resources-compliance-3454542353-ap-southeast-1.BackupBucketName }}"
+    accounts:
+      - "4543433543"  # Automation account
+    regions:
+      - ap-southeast-1  # Asia Pacific (Singapore)
