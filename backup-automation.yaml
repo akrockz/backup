@@ -1,0 +1,150 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Generic app template for an appspec setup.'
+
+Parameters:
+
+  ArtifactBucketName:
+    Type: String
+    Description: Automation bucket name.
+
+  ArtifactKeyPrefix:
+    Type: String
+    Description: Package.sh upload path.
+
+  BackupBucketName:
+    Type: String
+    Description: Name for backup bucket in comp account.
+
+  CodeBuildImage:
+    Description: CodeBuild docker image
+    Type: String
+
+Resources:
+
+  BackupRunnerProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: core-backup-runner
+      Description: Backups all codecommit repos and uploads to s3.
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - { Name: CodeCommitBackupsS3Bucket, Type: PLAINTEXT, Value: !Ref 'BackupBucketName' }
+        Image: !Ref CodeBuildImage
+        Type: LINUX_CONTAINER
+      ServiceRole:
+        Ref: BackupRole
+      Source:
+        Type: S3
+        Location:
+          Fn::Join: [ "/", [ Ref: ArtifactBucketName, Ref: ArtifactKeyPrefix, "scripts.zip" ]]
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - chmod +x ./backup_codecommit.sh
+            build:
+              commands:
+                - ./backup_codecommit.sh
+      # CFN doesn't propagate tags through to codebuild projects?
+      Tags:
+        - { Key: Portfolio, Value: core }
+        - { Key: App, Value: backup }
+
+  BackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: CodeBuildInlinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Join ['', ['arn:aws:logs:', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':log-group:/aws/codebuild/', 'core-backup*']]
+              - Effect: Allow
+                Action:
+                  - codecommit:ListRepositories
+                  - codecommit:GitPull
+                Resource:
+                  - "*"  # All the repos!
+              - Effect: Allow
+                Action:
+                  - s3:List*
+                Resource:
+                  - !Join ['', ['arn:aws:s3:::', !Ref 'ArtifactBucketName' ]]
+                  - !Join ['', ['arn:aws:s3:::', !Ref 'BackupBucketName' ]]
+              - Effect: Allow
+                Action:
+                  - s3:List*
+                  - s3:GetObject
+                Resource:
+                  - !Join ['', ['arn:aws:s3:::', !Ref 'ArtifactBucketName', '/', !Ref 'ArtifactKeyPrefix', '/*']]  # Allow the download of scripts.zip? Required?
+                  - !Join ['', ['arn:aws:s3:::', !Ref 'ArtifactBucketName', '/artefacts/core/automation-runner/*']]
+                  - !Join ['', ['arn:aws:s3:::', !Ref 'ArtifactBucketName', '/files/shared/*']]
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource:
+                  - !Join ['', ['arn:aws:s3:::', !Ref 'BackupBucketName', '/codecommit/*']]
+              # TODO Standardise an SNS topic per portfolio for announcements to devteams?
+              # - Effect: "Allow"
+              #   Action:
+              #     - "sns:Publish"
+              #   Resource:
+              #     - "arn:aws:sns:ap-southeast-1:3454345:codecommit_core_repos"
+
+  BackupScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Run backup system nightly"
+      ScheduleExpression: "cron(0 20 * * ? *)" # 8pm UTC daily (4am SGT)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt BackupRunnerProject.Arn
+          Id: TargetCodeBuild
+          RoleArn: !GetAtt BackupScheduledRole.Arn  # TODO Separate role?
+
+  BackupScheduledRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: CodeBuildInlinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource:
+                  - !GetAtt BackupRunnerProject.Arn
