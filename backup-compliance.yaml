@@ -1,0 +1,56 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Generic app template for an appspec setup.'
+
+Parameters:
+
+  ClientName:
+    Type: String
+    Description: Name of client.
+
+Resources:
+
+  # See https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain  # Don't delete the bucket even on stack teardown.
+    Properties:
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      BucketName: !Sub "${ClientName}-core-backup-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Suspended
+      # Does CFN propagate tags through?
+      # Tags:
+      #   - { Key: Portfolio, Value: core }
+      #   - { Key: App, Value: backup }
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: BackupBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "DelegateBackupAccess"
+            Effect: "Allow"
+            Principal:
+              AWS:
+                - arn:aws:iam::324542532:root
+            Action:
+              - s3:List*
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Resource:
+              - !Sub "${BackupBucket.Arn}"
+              - !Sub "${BackupBucket.Arn}/*"
+
+Outputs:
+
+  BackupBucketName:
+    Value: !Ref 'BackupBucket'
+    Description: Name of the backup bucket.
